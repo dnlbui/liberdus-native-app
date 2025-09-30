@@ -3,12 +3,11 @@ import {
   StyleSheet,
   Alert,
   Platform,
-  SafeAreaView,
-  KeyboardAvoidingView,
   AlertButton,
   Keyboard,
   View,
   Share,
+  Dimensions,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { AppState } from "react-native";
@@ -296,8 +295,6 @@ const App: React.FC = () => {
   const [webViewUrl, setWebViewUrl] = useState<string>("");
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [needsManualKeyboardHandling, setNeedsManualKeyboardHandling] =
-    useState(false);
   const [hasCapturedInitialHeight, setHasCapturedInitialHeight] =
     useState(false);
 
@@ -345,20 +342,29 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // Android keyboard handling - by communicating with webview
+  // Modern keyboard handling - minimal native involvement, let web content handle via Visual Viewport API
   useEffect(() => {
-    if (Platform.OS === "android") {
+    if (Platform.OS === "android" || Platform.OS === "ios") {
       const keyboardDidShowListener = Keyboard.addListener(
         "keyboardDidShow",
         (event) => {
           const keyboardHeight = event.endCoordinates.height;
           setKeyboardHeight(keyboardHeight);
           setIsKeyboardVisible(true);
-          console.log("⌨️ Keyboard shown, height:", keyboardHeight);
+          console.log("⌨️ NATIVE KEYBOARD SHOWN:");
+          console.log(`   📏 Keyboard height: ${keyboardHeight}px`);
+          console.log(`   📏 Screen coordinates:`, event.endCoordinates);
+          console.log(`   📱 WebView bounces: ${false}`);
+          console.log(`   📱 WebView scroll enabled: ${false}`);
+
           if (hasCapturedInitialHeight) {
             setTimeout(() => {
+              console.log(
+                "📐 Sending keyboard info to WebView for Visual Viewport API handling"
+              );
               sendMessageToWebView({ type: "KEYBOARD_SHOWN", keyboardHeight });
-            }, 100); // Increased timeout for better reliability
+              sendMessageToWebView({ type: "NATIVE_KEYBOARD_SHOWN" });
+            }, 100);
           } else {
             console.log(
               "⚠️ No valid initial height captured yet, skipping keyboard detection"
@@ -372,8 +378,14 @@ const App: React.FC = () => {
         () => {
           setKeyboardHeight(0);
           setIsKeyboardVisible(false);
-          setNeedsManualKeyboardHandling(false);
-          console.log("⌨️ Keyboard hidden");
+          console.log("⌨️ NATIVE KEYBOARD HIDDEN:");
+          console.log(`   📏 Keyboard height: 0px`);
+          console.log(`   📱 WebView bounces: ${false}`);
+          console.log(`   📱 WebView scroll enabled: ${false}`);
+
+          setTimeout(() => {
+            sendMessageToWebView({ type: "NATIVE_KEYBOARD_HIDDEN" });
+          }, 100);
         }
       );
 
@@ -530,6 +542,16 @@ const App: React.FC = () => {
   useEffect(() => {
     if (Platform.OS === "android") {
       console.log("🔥 Setting up Firebase messaging for Android");
+      let firebaseReady = true;
+      try {
+        // getMessaging will throw if no default Firebase app is initialized
+        getMessaging();
+      } catch (e) {
+        firebaseReady = false;
+        console.log("ℹ️ Skipping Firebase foreground handlers: no default app");
+      }
+
+      if (!firebaseReady) return;
 
       // Request permission for Android notifications
       const requestFirebasePermission = async () => {
@@ -633,55 +655,40 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Inject page-level scroll lock into the WebView when keyboard is visible
+  // Log keyboard state changes - modern approach with minimal native intervention
   useEffect(() => {
-    if (!webViewRef.current) return;
+    console.log("📱 WEBVIEW CONTAINER STATE CHANGE:");
+    console.log(`   ⌨️  Keyboard visible: ${isKeyboardVisible}`);
+    console.log(`   📏 Keyboard height: ${keyboardHeight}px`);
+    console.log(
+      `   🔧 Handling mode: MODERN_WEB_APPROACH (Visual Viewport API)`
+    );
+    console.log(`   📱 Platform: ${Platform.OS}`);
+    console.log("🧩 WebView props (Modern):", {
+      bounces: false,
+      scrollEnabled: false,
+      overScrollMode: "never",
+      nestedScrollEnabled: true,
+      contentInsetAdjustmentBehavior: "never",
+      automaticallyAdjustContentInsets: false,
+    });
+  }, [isKeyboardVisible, keyboardHeight]);
 
-    const lockScript = `
-      (function(){
-        try {
-          if(!window.__rnScrollLock){ window.__rnScrollLock = { handler: null }; }
-          var allowSel = '.messages-container';
-          var handler = function(e){
-            try {
-              if (!e.target.closest(allowSel)) {
-                e.preventDefault();
-              }
-            } catch(_) {}
-          };
-          window.__rnScrollLock.handler = handler;
-          document.documentElement.style.overscrollBehavior = 'none';
-          document.body.style.overscrollBehavior = 'none';
-          document.documentElement.style.touchAction = 'pan-y';
-          document.body.style.touchAction = 'pan-y';
-          window.addEventListener('touchmove', handler, { passive: false });
-          true;
-        } catch (e) { console.log('RN_LOCK_ERR', e && e.message); }
-      })();
-    `;
-
-    const unlockScript = `
-      (function(){
-        try {
-          var L = window.__rnScrollLock;
-          document.documentElement.style.overscrollBehavior = 'auto';
-          document.body.style.overscrollBehavior = 'auto';
-          document.documentElement.style.touchAction = 'auto';
-          document.body.style.touchAction = 'auto';
-          if(L && L.handler){ window.removeEventListener('touchmove', L.handler, { passive: false }); L.handler = null; }
-          true;
-        } catch (e) { console.log('RN_UNLOCK_ERR', e && e.message); }
-      })();
-    `;
-
-    if (isKeyboardVisible) {
-      console.log("🧷 Injecting page scroll lock into WebView");
-      webViewRef.current.injectJavaScript(lockScript);
-    } else {
-      console.log("🧷 Removing page scroll lock from WebView");
-      webViewRef.current.injectJavaScript(unlockScript);
-    }
-  }, [isKeyboardVisible]);
+  // Modern approach: Let web content handle all scrolling via Visual Viewport API
+  // No need for manual scroll locking - web content manages this
+  useEffect(() => {
+    console.log("🔧 MODERN WEBVIEW KEYBOARD APPROACH:");
+    console.log(
+      "   📱 Mode: WebView fills container + web content handles keyboard via Visual Viewport API"
+    );
+    console.log("   📱 Platform:", Platform.OS);
+    console.log(
+      "   📱 WebView props: contentInsetAdjustmentBehavior='never', automaticallyAdjustContentInsets=false"
+    );
+    console.log(
+      "   📱 Web content: Uses 100dvh, Visual Viewport API, and interactive-widget=resizes-content"
+    );
+  }, []);
 
   useEffect(() => {
     console.log("📱 Launched once:", hasLaunchedOnce);
@@ -1024,9 +1031,10 @@ const App: React.FC = () => {
         console.warn("⚪ White screen detected. Reloading WebView...");
         webViewRef.current?.reload();
       } else if (data.type === "KEYBOARD_DETECTION") {
-        const { needsManualHandling } = data;
-        console.log("⌨️ Keyboard detection result:", { needsManualHandling });
-        setNeedsManualKeyboardHandling(needsManualHandling);
+        // Modern approach: Web content handles keyboard via Visual Viewport API
+        console.log(
+          "⌨️ Keyboard detection - delegating to web content (Visual Viewport API)"
+        );
       } else if (data.type === "VIEWPORT_HEIGHT") {
         if (!hasCapturedInitialHeight && data.height > 400) {
           setHasCapturedInitialHeight(true);
@@ -1182,171 +1190,234 @@ const App: React.FC = () => {
   }
 
   if (showWebView) {
+    // Modern approach: WebView fills parent, web content handles keyboard
     const webViewContainerStyle = {
-      flex: 1,
-      ...(Platform.OS === "android" &&
-        isKeyboardVisible &&
-        needsManualKeyboardHandling && {
-          marginBottom: keyboardHeight + 17, // Use full keyboard height minus small buffer
-        }),
+      flex: 1, // WebView fills available space - essential for proper resizing
+      // No native adjustments - let web content handle keyboard via Visual Viewport API
     };
 
-    // Log keyboard handling state
+    // Log modern keyboard handling approach
     if (Platform.OS === "android" && isKeyboardVisible) {
       console.log("⌨️ Keyboard handling:", {
         keyboardHeight,
-        needsManualHandling: needsManualKeyboardHandling,
-        applyingMargin: needsManualKeyboardHandling,
+        needsManualHandling: false,
+        applyingMargin: false,
+        mode: "MODERN_WEB_APPROACH",
+        webViewProps: {
+          contentInsetAdjustmentBehavior: "never",
+          automaticallyAdjustContentInsets: false,
+          nestedScrollEnabled: true,
+        },
       });
     }
 
     return (
-      <SafeAreaView style={styles.container}>
+      <View
+        style={styles.container}
+        onLayout={(event) => {
+          const { width, height, x, y } = event.nativeEvent.layout;
+          console.log(
+            `📐 [${new Date().toISOString().slice(11, 23)}] CONTAINER LAYOUT:`,
+            { width, height, x, y }
+          );
+          console.log(
+            `   ⌨️  Keyboard status: ${
+              isKeyboardVisible ? "VISIBLE" : "HIDDEN"
+            }`
+          );
+        }}
+      >
         <StatusBar hidden={true} />
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={0}
+        <View
+          style={webViewContainerStyle}
+          pointerEvents="box-none"
+          onLayout={(event) => {
+            const { width, height, x, y } = event.nativeEvent.layout;
+            console.log(
+              `📐 [${new Date()
+                .toISOString()
+                .slice(11, 23)}] WEBVIEW_CONTAINER LAYOUT:`,
+              {
+                width,
+                height,
+                x,
+                y,
+              }
+            );
+            console.log(
+              `   ⌨️  Keyboard status: ${
+                isKeyboardVisible ? "VISIBLE" : "HIDDEN"
+              }`
+            );
+            console.log(`   ⌨️  Y position: ${y}px`);
+            console.log(`   ⌨️  Bottom edge: ${y + height}px`);
+
+            const availableSpace =
+              Dimensions.get("window").height - keyboardHeight;
+            console.log(`   ⌨️  Available space: ${availableSpace}px`);
+            console.log(
+              `   ⌨️  Container fits: ${
+                y + height <= availableSpace ? "YES" : "NO"
+              }`
+            );
+          }}
         >
-          <View style={webViewContainerStyle}>
-            <WebView
-              key={webViewUrl}
-              ref={webViewRef}
-              webviewDebuggingEnabled={true}
-              source={{ uri: webViewUrl }}
-              style={styles.webView}
-              allowsInlineMediaPlayback={true} // ✅ Required for <video> on iOS
-              mediaPlaybackRequiresUserAction={false} // ✅ Let camera start automatically
-              // mediaCapturePermissionGrantType={"grant"} // ✅ Prompt for media capture permissions
-              // allowsProtectedMedia={true} // ✅ Allow protected media content
-              // allowsAirPlayForMediaPlayback={true} // ✅ Allow media playback features
-              // allowsPictureInPictureMediaPlayback={true} // ✅ Enable media features
-              // allowsFullscreenVideo // On Android, this makes Keyboard to cover the input box on focus
-              useWebView2
-              onError={(syntheticEvent) => {
-                const { nativeEvent } = syntheticEvent;
-                console.error("WebView error: ", nativeEvent);
-                Alert.alert("WebView Error", "Failed to load the page");
-              }}
-              // Enable JavaScript
-              javaScriptEnabled={true}
-              // Enable DOM storage
-              domStorageEnabled={true}
-              // Allow mixed content (HTTP and HTTPS)
-              mixedContentMode="compatibility"
-              // Allow universal access from file URLs
-              allowUniversalAccessFromFileURLs={true}
-              // Start in loading state
-              startInLoadingState={true}
-              // Allow file access
-              allowFileAccess={true}
-              // Add caching policy to prevent white screens
-              cacheEnabled={true}
-              cacheMode="LOAD_DEFAULT"
-              // Enable hardware acceleration for Android
-              renderToHardwareTextureAndroid={true}
-              onShouldStartLoadWithRequest={(request) => {
-                const url = request.url;
-                const openInBrowser = isExternalLink(webViewUrl, url);
-                console.log(
-                  "🔗 onShouldStartLoadWithRequest URL:",
-                  url,
-                  webViewUrl,
-                  openInBrowser
-                );
-                if (openInBrowser) {
-                  Linking.openURL(url);
-                  return false; // prevent WebView from loading it
-                }
-                return true; // allow normal navigation
-              }}
-              // Needed for iOS to make `onShouldStartLoadWithRequest` work
-              setSupportMultipleWindows={false}
-              // injectedJavaScript={injectedJavaScript} // Can be used for logging the webview console
-              onMessage={handleWebViewMessage}
-              // Bounce effect on iOS
-              bounces={!isKeyboardVisible}
-              // Scroll enabled - disable when keyboard is visible to prevent scrolling to white space
-              scrollEnabled={!isKeyboardVisible}
-              // Add load end handler
-              onLoadEnd={async () => {
-                console.log("✅ WebView load completed");
+          <WebView
+            key={webViewUrl}
+            ref={webViewRef}
+            webviewDebuggingEnabled={true}
+            source={{ uri: webViewUrl }}
+            style={styles.webView}
+            allowsInlineMediaPlayback={true} // ✅ Required for <video> on iOS
+            mediaPlaybackRequiresUserAction={false} // ✅ Let camera start automatically
+            // mediaCapturePermissionGrantType={"grant"} // ✅ Prompt for media capture permissions
+            // allowsProtectedMedia={true} // ✅ Allow protected media content
+            // allowsAirPlayForMediaPlayback={true} // ✅ Allow media playback features
+            // allowsPictureInPictureMediaPlayback={true} // ✅ Enable media features
+            // allowsFullscreenVideo // On Android, this makes Keyboard to cover the input box on focus
+            useWebView2
+            onError={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.error("WebView error: ", nativeEvent);
+              Alert.alert("WebView Error", "Failed to load the page");
+            }}
+            // Enable JavaScript
+            javaScriptEnabled={true}
+            // Enable DOM storage
+            domStorageEnabled={true}
+            // Allow mixed content (HTTP and HTTPS)
+            mixedContentMode="compatibility"
+            // Allow universal access from file URLs
+            allowUniversalAccessFromFileURLs={true}
+            // Start in loading state
+            startInLoadingState={true}
+            // Allow file access
+            allowFileAccess={true}
+            // Add caching policy to prevent white screens
+            cacheEnabled={true}
+            cacheMode="LOAD_DEFAULT"
+            // Enable hardware acceleration for Android
+            renderToHardwareTextureAndroid={true}
+            onShouldStartLoadWithRequest={(request) => {
+              const url = request.url;
+              const openInBrowser = isExternalLink(webViewUrl, url);
+              console.log(
+                "🔗 onShouldStartLoadWithRequest URL:",
+                url,
+                webViewUrl,
+                openInBrowser
+              );
+              if (openInBrowser) {
+                Linking.openURL(url);
+                return false; // prevent WebView from loading it
+              }
+              return true; // allow normal navigation
+            }}
+            // Needed for iOS to make `onShouldStartLoadWithRequest` work
+            setSupportMultipleWindows={false}
+            // injectedJavaScript={injectedJavaScript} // Can be used for logging the webview console
+            onMessage={handleWebViewMessage}
+            /* Modern approach: Disable WebView automatic adjustments - let web content handle keyboard */
+            contentInsetAdjustmentBehavior="never"
+            automaticallyAdjustContentInsets={false}
+            /* Reduce rubber-banding and horizontal bounce */
+            bounces={false}
+            overScrollMode="never"
+            directionalLockEnabled={true}
+            /* Enable nested scrolling for better touch handling */
+            nestedScrollEnabled={true}
+            /* Disable native scrolling to let web content handle scrolling */
+            scrollEnabled={false}
+            /* Additional scroll prevention */
+            showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
+            // Add load end handler
+            onLoadEnd={async () => {
+              console.log("✅ WebView load completed");
 
-                // const timestamp = Date.now() + 10 * 1000; // After 10 seconds from now
+              // const timestamp = Date.now() + 10 * 1000; // After 10 seconds from now
 
-                // setTimeout(() => {
-                //   console.log(
-                //     `📞 Triggering scheduled call notification for timestamp: ${timestamp}`
-                //   );
-                //   if (webViewRef.current) {
-                //     // Inject JavaScript to send SCHEDULE_CALL message to schedule a notification
-                //     webViewRef.current.injectJavaScript(`
-                //       (function() {
-                //         // Send SCHEDULE_CALL message
-                //         window.ReactNativeWebView.postMessage(JSON.stringify({
-                //           type: 'SCHEDULE_CALL',
-                //           username: 'jai',
-                //           timestamp: ${timestamp}
-                //         }));
+              // setTimeout(() => {
+              //   console.log(
+              //     `📞 Triggering scheduled call notification for timestamp: ${timestamp}`
+              //   );
+              //   if (webViewRef.current) {
+              //     // Inject JavaScript to send SCHEDULE_CALL message to schedule a notification
+              //     webViewRef.current.injectJavaScript(`
+              //       (function() {
+              //         // Send SCHEDULE_CALL message
+              //         window.ReactNativeWebView.postMessage(JSON.stringify({
+              //           type: 'SCHEDULE_CALL',
+              //           username: 'jai',
+              //           timestamp: ${timestamp}
+              //         }));
 
-                //       })();
-                //       true;
-                //     `);
-                //   }
-                // }, 1000); // Wait 1 seconds after load
+              //       })();
+              //       true;
+              //     `);
+              //   }
+              // }, 1000); // Wait 1 seconds after load
 
-                // setTimeout(() => {
-                //   console.log(
-                //     `📞 Clearing scheduled call notification for timestamp: ${timestamp}`
-                //   );
-                //   if (webViewRef.current) {
-                //     // Inject JavaScript to send CANCEL_SCHEDULE_CALL message to cancel the scheduled notification
-                //     webViewRef.current.injectJavaScript(`
-                //       (function() {
-                //         // Send CANCEL_SCHEDULE_CALL message
-                //         window.ReactNativeWebView.postMessage(JSON.stringify({
-                //           type: 'CANCEL_SCHEDULE_CALL',
-                //           username: 'jai',
-                //           timestamp: ${timestamp}
-                //         }));
+              // setTimeout(() => {
+              //   console.log(
+              //     `📞 Clearing scheduled call notification for timestamp: ${timestamp}`
+              //   );
+              //   if (webViewRef.current) {
+              //     // Inject JavaScript to send CANCEL_SCHEDULE_CALL message to cancel the scheduled notification
+              //     webViewRef.current.injectJavaScript(`
+              //       (function() {
+              //         // Send CANCEL_SCHEDULE_CALL message
+              //         window.ReactNativeWebView.postMessage(JSON.stringify({
+              //           type: 'CANCEL_SCHEDULE_CALL',
+              //           username: 'jai',
+              //           timestamp: ${timestamp}
+              //         }));
 
-                //       })();
-                //       true;
-                //     `);
-                //   }
-                // }, 3000); // Wait 3 seconds after load
-              }}
-              // Add load start handler
-              onLoadStart={() => {
-                console.log("🔄 WebView load started");
-              }}
-              // WHITE SCREEN FIX ON IOS
-              onContentProcessDidTerminate={(syntheticEvent) => {
-                const { nativeEvent } = syntheticEvent;
-                console.warn("❌ Content process terminated", nativeEvent);
-                webViewRef.current?.reload();
-              }}
-              // WHITE SCREEN FIX ON ANDROID
-              onRenderProcessGone={(syntheticEvent) => {
-                const { nativeEvent } = syntheticEvent;
-                console.warn("❌ Render process gone: ", nativeEvent);
-                webViewRef.current?.reload();
-              }}
-            />
-          </View>
-        </KeyboardAvoidingView>
-      </SafeAreaView>
+              //       })();
+              //       true;
+              //     `);
+              //   }
+              // }, 3000); // Wait 3 seconds after load
+            }}
+            // Add load start handler
+            onLoadStart={() => {
+              console.log("🔄 WebView load started");
+            }}
+            // WHITE SCREEN FIX ON IOS
+            onContentProcessDidTerminate={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.warn("❌ Content process terminated", nativeEvent);
+              webViewRef.current?.reload();
+            }}
+            // WHITE SCREEN FIX ON ANDROID
+            onRenderProcessGone={(syntheticEvent) => {
+              const { nativeEvent } = syntheticEvent;
+              console.warn("❌ Render process gone: ", nativeEvent);
+              webViewRef.current?.reload();
+            }}
+          />
+        </View>
+      </View>
     );
   }
 };
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
     backgroundColor: "#fff",
   },
   webView: {
-    flex: 1,
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "#fff",
   },
 });
 
