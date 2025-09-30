@@ -10,12 +10,23 @@ import {
 class CallKeepService {
   public isSetup: boolean = false;
   private currentCallUUID: string | null = null;
-  private incomingCallTimeout: ReturnType<typeof setTimeout> | null = null;
+  private get isAndroidDevDisabled(): boolean {
+    // Skip CallKeep on Android during development/emulator to avoid
+    // PhoneAccount registration errors that require privileged caps
+    // on modern Android (14+). This is safe for dev and avoids crashes.
+    return Platform.OS === "android" && __DEV__ === true;
+  }
 
   public async setup(
     appState: "active" | "background" = "active"
   ): Promise<void> {
     if (this.isSetup) return;
+
+    if (this.isAndroidDevDisabled) {
+      console.log("🛑 Skipping CallKeep setup on Android in development build");
+      this.isSetup = false;
+      return;
+    }
 
     try {
       console.log(`🔧 Starting CallKeep setup for ${Platform.OS}...`);
@@ -69,6 +80,7 @@ class CallKeepService {
   }
 
   private setupEventListeners(): void {
+    if (this.isAndroidDevDisabled) return;
     RNCallKeep.addEventListener("answerCall", this.onAnswerCall);
     RNCallKeep.addEventListener("endCall", this.onEndCall);
     RNCallKeep.addEventListener("didPerformDTMFAction", this.onDTMFAction);
@@ -112,6 +124,10 @@ class CallKeepService {
   }
 
   public handleIncomingCall(data: CallData): void {
+    if (this.isAndroidDevDisabled) {
+      console.log("🛑 Ignoring incoming call in Android development build");
+      return;
+    }
     try {
       const callerName = data.callerName || "Unknown Caller";
       const callUUID = data.callId;
@@ -137,6 +153,12 @@ class CallKeepService {
     providedUUID?: string,
     hasVideo: boolean = false
   ): string {
+    if (this.isAndroidDevDisabled) {
+      console.log(
+        "🛑 displayIncomingCall() no-op in Android development build"
+      );
+      return providedUUID || (uuid.v4() as string);
+    }
     const callUUID = providedUUID || (uuid.v4() as string);
     this.currentCallUUID = callUUID;
 
