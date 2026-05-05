@@ -1264,11 +1264,9 @@ const App: React.FC = () => {
   if (showWebView) {
     const webViewContainerStyle = {
       flex: 1,
-      ...(Platform.OS === "android" &&
-        isKeyboardVisible &&
-        needsManualKeyboardHandling && {
-          marginBottom: keyboardHeight,
-        }),
+      ...(Platform.OS === "android" && isKeyboardVisible
+        ? { marginBottom: keyboardHeight }
+        : {}),
     };
 
     // Log keyboard handling state
@@ -1276,7 +1274,7 @@ const App: React.FC = () => {
       console.log("⌨️ Keyboard handling:", {
         keyboardHeight,
         needsManualHandling: needsManualKeyboardHandling,
-        applyingMargin: needsManualKeyboardHandling,
+        applyingMargin: true,
       });
     }
 
